@@ -95,11 +95,3 @@ function scanChat() {
 // Initialize
 setInterval(scanChat, 1500);
 
-// Create/open UI button
-const button = document.createElement('button');
-button.textContent = 'Show Links';
-button.style.position = 'fixed';
-button.style.bottom = '10px';
-button.style.right = '10px';
-button.onclick = () => chrome.runtime.sendMessage({action: "openLinks"});
-document.body.appendChild(button);
