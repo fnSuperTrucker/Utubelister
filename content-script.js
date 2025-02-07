@@ -9,26 +9,13 @@ const platforms = {
     ],
     messages: '.chat-history--row, .js-chat-history-item' // Updated selector for messages
   },
-  odysee: {
-    container: [
-      '.livestream-chat',
-      '.chat-window',
-      '#chat-content'
-    ],
-    messages: '.comment, .message-item, .chat-line'
-  },
-  pilled: {
-    container: [
-      '#stream-chat',
-      '.chat-box',
-      '#chat-box'
-    ],
-    messages: '.message, .chat-line, .message-content'
-  }
+  // ... other platforms ...
 };
 
 const youtubeRegex = /https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/gi;
-let currentPlatform = null;
+let currentPlatform = detectPlatform();
+let scanIntervalId = null;
+let observer;
 
 function detectPlatform() {
   const host = window.location.hostname;
@@ -39,59 +26,106 @@ function detectPlatform() {
 }
 
 function scanChat() {
-  console.log('Scanning chat for links...');
-  if (!currentPlatform) currentPlatform = detectPlatform();
-  if (!currentPlatform) {
-    console.log('No platform detected');
-    return;
-  }
-
-  const container = currentPlatform.container
-    .map(sel => document.querySelector(sel))
-    .find(el => el);
-
-  if (!container) {
-    console.warn('Chat container not found with selector:', currentPlatform.container);
-    return;
-  }
-
-  console.log('Chat container found:', container);
-  const messages = container.querySelectorAll(currentPlatform.messages);
-  
-  if (messages.length === 0) {
-    console.log('No messages found in the chat');
-  } else {
-    console.log(`Found ${messages.length} messages`);
-  }
-  
-  messages.forEach(msg => {
-    if (msg.dataset.processed) return;
-    console.log('Processing message:', msg.textContent);
-    const links = [...msg.textContent.matchAll(youtubeRegex)]
-      .map(m => m[0]);
-    
-    if (links.length) {
-      console.log('Found links:', links);
-      chrome.storage.local.get({links: []}, data => {
-        if (Array.isArray(data.links)) {
-          const newLinks = [...new Set([...data.links, ...links])];
-          chrome.storage.local.set({links: newLinks.slice(-100)}, function() {
-            if (chrome.runtime.lastError) {
-              console.error("Error setting storage: ", chrome.runtime.lastError);
-            } else {
-              console.log("Links updated in storage");
-              chrome.runtime.sendMessage({action: "updateLinks"});
-            }
-          });
-        } else {
-          console.error("Stored links are not an array");
-        }
-      });
+  try {
+    console.log('Scanning chat for links...');
+    if (!currentPlatform) {
+      console.log('No platform detected');
+      return;
     }
-    msg.dataset.processed = true;
-  });
+
+    let container = null;
+    for (let sel of currentPlatform.container) {
+      try {
+        container = document.querySelector(sel);
+        if (container) break;
+      } catch (error) {
+        console.warn('Error querying selector:', sel, error);
+      }
+    }
+
+    if (!container) {
+      console.log('No chat container detected; possibly on a page without chat.');
+      return;
+    }
+
+    console.log('Chat container found:', container);
+    try {
+      const messages = container.querySelectorAll(currentPlatform.messages);
+      if (messages.length === 0) {
+        console.log('No messages found in the chat');
+      } else {
+        console.log(`Found ${messages.length} messages`);
+      }
+      
+      messages.forEach(msg => {
+        if (msg.dataset.processed) return;
+        console.log('Processing message:', msg.textContent);
+        const links = [...msg.textContent.matchAll(youtubeRegex)].map(m => m[0]);
+        
+        if (links.length) {
+          console.log('Found links:', links);
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            chrome.storage.local.get({links: []}, data => {
+              if (Array.isArray(data.links)) {
+                const newLinks = [...new Set([...data.links, ...links])];
+                chrome.storage.local.set({links: newLinks.slice(-100)}, function() {
+                  if (chrome.runtime.lastError) {
+                    console.error("Error setting storage: ", chrome.runtime.lastError);
+                  } else {
+                    console.log("Links updated in storage");
+                    if (chrome.runtime && chrome.runtime.sendMessage) {
+                      chrome.runtime.sendMessage({action: "updateLinks"});
+                    } else {
+                      console.warn("chrome.runtime.sendMessage not available");
+                    }
+                  }
+                });
+              } else {
+                console.error("Stored links are not an array");
+              }
+            });
+          } else {
+            console.warn('Chrome storage API not available, skipping link storage');
+          }
+        }
+        msg.dataset.processed = true;
+      });
+    } catch (messagesError) {
+      console.error('Error querying messages:', messagesError);
+    }
+  } catch (error) {
+    console.error('An error occurred while scanning chat:', error);
+  }
 }
 
-// Initialize
-setInterval(scanChat, 1500);
+function observeMutations() {
+  if (!observer && document.body) {
+    observer = new MutationObserver(() => {
+      console.log('DOM change detected, initiating scan');
+      scanChat(); // Scan whenever there's a change in the DOM
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+}
 
+function startScanning() {
+  if (scanIntervalId) clearInterval(scanIntervalId);
+  
+  setTimeout(() => {
+    scanIntervalId = setInterval(scanChat, 500); // More frequent scans after initial delay
+    scanChat(); // Immediate scan
+    observeMutations(); // Start observing mutations
+  }, 2000); // Initial delay
+}
+
+document.addEventListener('DOMContentLoaded', startScanning);
+window.addEventListener('load', startScanning);
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startScanning);
+} else {
+  startScanning();
+}

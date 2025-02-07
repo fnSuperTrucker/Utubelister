@@ -6,12 +6,28 @@ function createLinkElement(url) {
   a.onclick = function(event) {
     event.preventDefault();
     chrome.tabs.query({ url: "https://www.youtube.com/*" }, function(tabs) {
-      if (tabs.length > 0) {
-        // Update existing YouTube tab
-        chrome.tabs.update(tabs[0].id, { url: url });
-      } else {
-        // Open in new tab if no YouTube tab exists
-        chrome.tabs.create({ url: url });
+      try {
+        if (tabs.length > 0) {
+          // Update existing YouTube tab
+          chrome.tabs.update(tabs[0].id, { url: url }, function() {
+            if (chrome.runtime.lastError) {
+              console.error("Error updating tab:", chrome.runtime.lastError);
+              // Fallback to opening in new tab if update fails
+              chrome.tabs.create({ url: url });
+            }
+          });
+        } else {
+          // Open in new tab if no YouTube tab exists
+          chrome.tabs.create({ url: url }, function() {
+            if (chrome.runtime.lastError) {
+              console.error("Error creating tab:", chrome.runtime.lastError);
+            }
+          });
+        }
+      } catch (error) {
+        console.error("An error occurred while handling link click:", error);
+        // If all else fails, try to open in a new window
+        window.open(url, '_blank');
       }
     });
   };
